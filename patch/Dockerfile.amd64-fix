@@ -1,0 +1,5 @@
+# we-mp-rss amd64 补丁版 = 官方 amd64 镜像 + Maple 的 driver 补丁
+# 补丁修:微信登录页隐藏空白二维码(卡"获取二维码")、登录成功检测、PID锁、token过期判断
+FROM ghcr.io/rachelos/we-mp-rss:latest
+COPY wx.py /app/driver/wx.py
+COPY success.py /app/driver/success.py
