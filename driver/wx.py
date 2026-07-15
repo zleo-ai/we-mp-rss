@@ -503,22 +503,29 @@ class Wx:
                     if os.path.getsize(path) <= 1024 or hi - lo < 16:
                         raise Exception("二维码图片为空白，请重新扫码")
 
-            saved_qr = False
-            try:
-                qr_url = urljoin(self.WX_LOGIN, code_src)
-                response = await page.context.request.get(qr_url, headers={"Referer": self.WX_LOGIN})
-                if response.ok:
-                    body = await response.body()
-                    with Image.open(BytesIO(body)) as img:
-                        lo, hi = img.convert("L").getextrema()
-                        if len(body) > 1024 and hi - lo >= 16:
-                            with open(self.wx_login_url, "wb") as f:
-                                f.write(body)
-                            saved_qr = True
-            except Exception as e:
-                print_warning(f"直接下载二维码失败，改用截图: {str(e)}")
+            async def download_qr(src: str) -> bool:
+                """带 Referer 下载当前二维码字节,灰度极差+体积判空后写盘。
+                成功返回 True。初始保存与后台轮换重抓共用同一套空白防护。"""
+                try:
+                    qr_url = urljoin(self.WX_LOGIN, src)
+                    response = await page.context.request.get(
+                        qr_url, headers={"Referer": self.WX_LOGIN}
+                    )
+                    if response.ok:
+                        body = await response.body()
+                        with Image.open(BytesIO(body)) as img:
+                            lo, hi = img.convert("L").getextrema()
+                            if len(body) > 1024 and hi - lo >= 16:
+                                with open(self.wx_login_url, "wb") as f:
+                                    f.write(body)
+                                return True
+                except Exception as e:
+                    print_warning(f"直接下载二维码失败: {str(e)}")
+                return False
 
+            saved_qr = await download_qr(code_src)
             if not saved_qr:
+                print_warning("直接下载二维码失败，改用截图")
                 await qrcode.screenshot(path=self.wx_login_url)
 
             ensure_qr_image(self.wx_login_url)
@@ -540,11 +547,47 @@ class Wx:
                     print(f"登录成功，正在获取cookie和token...")
 
             page.on('framenavigated', handle_frame_navigated)
-            await page.wait_for_url(
-                lambda url: is_home_url(url),
-                timeout=5 * 60 * 1000,
-                wait_until="domcontentloaded",
-            )
+
+            # 微信登录二维码每 2-5 分钟自动轮换,老码扫了即失效。后台并发跟随:
+            # 定期检查登录页二维码 <img> 的 src 是否变化,变了就带 Referer 重新
+            # 下载重存,让 static/wx_qrcode.png 始终等于微信当前活码,用户无需掐表。
+            # 登录成功或超时时取消该任务,避免死循环/资源泄漏。
+            async def watch_qr_rotation(last_src: str):
+                check_interval = 25  # 秒;轮换约 2-5min,25s 粒度足够跟上
+                while True:
+                    try:
+                        await asyncio.sleep(check_interval)
+                        if page.is_closed():
+                            break
+                        el = page.locator(qr_tag).first
+                        if await el.count() == 0:
+                            continue
+                        new_src = await el.get_attribute("src")
+                        if new_src and new_src != last_src:
+                            if await download_qr(new_src):
+                                last_src = new_src
+                                print(f"检测到二维码轮换，已重存活码: {new_src}")
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        print_warning(f"二维码轮换监听异常(忽略,继续): {str(e)}")
+
+            qr_watch_task = asyncio.create_task(watch_qr_rotation(code_src))
+            try:
+                # 扫码窗口由 5 分钟延长到 20 分钟,配合上面的活码跟随,给用户从容扫码。
+                await page.wait_for_url(
+                    lambda url: is_home_url(url),
+                    timeout=20 * 60 * 1000,
+                    wait_until="domcontentloaded",
+                )
+            finally:
+                qr_watch_task.cancel()
+                try:
+                    await qr_watch_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
 
             from .success import setStatus
             with self._login_lock:
@@ -734,7 +777,10 @@ class Wx:
             print(f"设置cookie过期时出错: {str(e)}")
             return False
             
-    def check_lock(self, timeout: int = 300) -> bool:
+    def check_lock(self, timeout: int = 1200) -> bool:
+        # 陈旧锁判定窗口与扫码登录窗口(20min)对齐:登录进程仍活着时
+        # (psutil.pid_exists 命中)不因超时被误强制释放,否则页面刷新会
+        # 掐断仍在进行的扫码会话;进程已死仍由下方 pid_exists 分支即时清理。
         if not os.path.exists(self.lock_file_path):
             return False
         try:
