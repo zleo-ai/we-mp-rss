@@ -551,40 +551,120 @@ class Wx:
             except Exception:
                 pass
 
-            # 定位二维码区域
-            qr_tag = ".login__type__container__scan__qrcode"
-            # 新版登录页可能默认展示"微信快捷登录"，二维码被隐藏或src为空，
-            # 需要先切换回扫码登录并等待二维码图片真正加载完成
+            # 定位真实二维码。上游：新版页可能默认"微信快捷登录"，要先切回扫码。
+            # 补丁：页面会留一个隐藏的空 src 同 class img，query_selector 会截到白图，
+            # 所以只等带 scanloginqrcode 的可见图片。
+            from urllib.parse import urljoin
+            from io import BytesIO
+
+            qr_tag = ".login__type__container__scan__qrcode[src*='scanloginqrcode']"
             if not await self._wait_qrcode_ready(page, qr_tag):
                 raise Exception("二维码加载超时，请重试")
-            # 获取二维码图片URL
-            qrcode = await page.query_selector(qr_tag)
+            qrcode = page.locator(qr_tag).first
+            await qrcode.wait_for(state="visible", timeout=30 * 1000)
+            await page.wait_for_function(
+                """selector => {
+                    const img = document.querySelector(selector);
+                    return img && img.complete && img.naturalWidth > 0 && img.getAttribute('src');
+                }""",
+                arg=qr_tag,
+                timeout=30 * 1000,
+            )
             code_src = await qrcode.get_attribute("src")
             print("正在生成二维码图片...")
             print(f"code_src:{code_src}")
 
-            # 使用Playwright截图功能（添加异常处理）
-            await qrcode.screenshot(path=self.wx_login_url)
+            def ensure_qr_image(path: str):
+                with Image.open(path) as img:
+                    lo, hi = img.convert("L").getextrema()
+                    if os.path.getsize(path) <= 1024 or hi - lo < 16:
+                        raise Exception("二维码图片为空白，请重新扫码")
 
+            async def download_qr(src: str) -> bool:
+                """带 Referer 下载当前二维码字节,灰度极差+体积判空后写盘。
+                成功返回 True。初始保存与后台轮换重抓共用同一套空白防护。"""
+                try:
+                    qr_url = urljoin(self.WX_LOGIN, src)
+                    response = await page.context.request.get(
+                        qr_url, headers={"Referer": self.WX_LOGIN}
+                    )
+                    if response.ok:
+                        body = await response.body()
+                        with Image.open(BytesIO(body)) as img:
+                            lo, hi = img.convert("L").getextrema()
+                            if len(body) > 1024 and hi - lo >= 16:
+                                with open(self.wx_login_url, "wb") as f:
+                                    f.write(body)
+                                return True
+                except Exception as e:
+                    print_warning(f"直接下载二维码失败: {str(e)}")
+                return False
+
+            saved_qr = await download_qr(code_src)
+            if not saved_qr:
+                print_warning("直接下载二维码失败，改用截图")
+                await qrcode.screenshot(path=self.wx_login_url)
+
+            ensure_qr_image(self.wx_login_url)
             print("二维码已保存为 wx_qrcode.png，请扫码登录...")
             self.HasCode = True
-            if os.path.getsize(self.wx_login_url) <= 364:
-                raise Exception("二维码图片获取失败，请重新扫码")
             # 等待登录成功（检测二维码图片加载完成）
             print("等待扫码登录...")
             if self.Notice is not None:
                 self.Notice()
 
-            # 监听页面导航事件
+            # Wait for the actual WeChat backend home page. The QR page may
+            # trigger unrelated frame navigations before the user confirms login.
+            def is_home_url(url: str) -> bool:
+                return bool(url and self.WX_HOME in url)
+
             def handle_frame_navigated(frame):
                 current_url = frame.url
-                if self.WX_HOME in current_url:
+                if is_home_url(current_url):
                     print(f"登录成功，正在获取cookie和token...")
+
             page.on('framenavigated', handle_frame_navigated)
-            # 只等待主页面跳转到公众平台首页，
-            # 不能用 wait_for_event("framenavigated")：页面内的快捷登录iframe
-            # 加载时也会触发该事件，导致未扫码就误判为登录成功
-            await page.wait_for_url(lambda url: "cgi-bin/home" in url, timeout=5*60 * 1000)
+            # 只等待主页面跳转到公众平台首页。
+            # 不能用 wait_for_event("framenavigated")：页面内的快捷登录 iframe
+            # 加载时也会触发该事件，导致未扫码就误判为登录成功。
+            # 微信登录二维码每 2-5 分钟自动轮换,老码扫了即失效。后台并发跟随:
+            # 定期检查登录页二维码 <img> 的 src 是否变化,变了就带 Referer 重新
+            # 下载重存,让 static/wx_qrcode.png 始终等于微信当前活码。
+            async def watch_qr_rotation(last_src: str):
+                check_interval = 25  # 秒;轮换约 2-5min,25s 粒度足够跟上
+                while True:
+                    try:
+                        await asyncio.sleep(check_interval)
+                        if page.is_closed():
+                            break
+                        el = page.locator(qr_tag).first
+                        if await el.count() == 0:
+                            continue
+                        new_src = await el.get_attribute("src")
+                        if new_src and new_src != last_src:
+                            if await download_qr(new_src):
+                                last_src = new_src
+                                print(f"检测到二维码轮换，已重存活码: {new_src}")
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        print_warning(f"二维码轮换监听异常(忽略,继续): {str(e)}")
+
+            qr_watch_task = asyncio.create_task(watch_qr_rotation(code_src))
+            try:
+                await page.wait_for_url(
+                    lambda url: is_home_url(url),
+                    timeout=20 * 60 * 1000,
+                    wait_until="domcontentloaded",
+                )
+            finally:
+                qr_watch_task.cancel()
+                try:
+                    await qr_watch_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
 
             from .success import setStatus
             with self._login_lock:
@@ -774,10 +854,34 @@ class Wx:
             print(f"设置cookie过期时出错: {str(e)}")
             return False
             
-    def check_lock(self, timeout: int = 300) -> bool:
-        if not os.path.exists(self.wx_login_url):
+    def check_lock(self, timeout: int = 1200) -> bool:
+        # 陈旧锁判定窗口与扫码登录窗口(20min)对齐:登录进程仍活着时
+        # (psutil.pid_exists 命中)不因超时被误强制释放,否则页面刷新会
+        # 掐断仍在进行的扫码会话;进程已死仍由下方 pid_exists 分支即时清理。
+        if not os.path.exists(self.lock_file_path):
             return False
-        return True
+        try:
+            with open(self.lock_file_path, 'r') as f:
+                content = f.read().strip()
+            parts = content.split('|')
+            if len(parts) < 2:
+                self._force_release_lock()
+                return False
+            pid = int(parts[0])
+            started_at = float(parts[1])
+            if time.time() - started_at > timeout:
+                self._force_release_lock()
+                self.Clean()
+                return False
+            if not psutil.pid_exists(pid):
+                self._force_release_lock()
+                self.Clean()
+                return False
+            return True
+        except Exception:
+            self._force_release_lock()
+            self.Clean()
+            return False
     def set_lock(self):
         """创建锁定文件，写入当前进程PID和时间戳"""
         os.makedirs(os.path.dirname(self.lock_file_path), exist_ok=True)

@@ -17,9 +17,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends bash && rm -rf 
 
 COPY . .
 COPY config.example.yaml /app/config.yaml
+# EOS-658: persist webkit in the image layer (do not docker-commit browsers).
+# install.sh already installs BROWSER_TYPE=webkit when INSTALL=True; this RUN
+# keeps webkit (MP login) next to chromium (weread cookie refresh).
 # 微信读书 Cookie 自动刷新：安装 Chromium 浏览器（与 webkit 共存）
 RUN VENV=$(ls -d /app/env_* | head -1) && \
-    PLAYWRIGHT_BROWSERS_PATH=/app/env/driver/_$(uname -m) "$VENV/bin/python3" -m playwright install chromium && \
+    PLAYWRIGHT_BROWSERS_PATH=/app/env/driver/_$(uname -m) \
+      "$VENV/bin/python3" -m playwright install webkit && \
+    PLAYWRIGHT_BROWSERS_PATH=/app/env/driver/_$(uname -m) \
+      "$VENV/bin/python3" -m playwright install chromium && \
     "$VENV/bin/python3" -m playwright install-deps chromium || true
 RUN chmod +x /app/start.sh
 

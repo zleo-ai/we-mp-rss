@@ -1,0 +1,20 @@
+# Overlay fallback: official ghcr image + in-tree driver patches + webkit.
+#
+# EOS-658 ③. Prefer the repo-root Dockerfile (source build / v3): it already
+# runs `playwright install webkit` in the image layer. This overlay file is
+# only for rebuilding on top of ghcr.io/rachelos/we-mp-rss:latest.
+#
+# Do NOT assume ghcr :latest == any particular git SHA. The 2026-07 analysis
+# found :latest was an older 2026-05-20 pack and lacked WAL/timeout/queue
+# fixes. Overlay does not pick those up; source-build does.
+#
+# Build (repo root as context):
+#   docker build -f patch/Dockerfile.amd64-fix-v2 -t we-mp-rss:amd64-fix-v2 .
+FROM ghcr.io/rachelos/we-mp-rss:latest
+
+COPY driver/wx.py /app/driver/wx.py
+COPY driver/success.py /app/driver/success.py
+
+# Persist webkit in the image layer (replaces `docker commit`).
+# App runs in /app/env_<arch> (start.sh: PLANT_PATH=/app/env + uname -m).
+RUN . "/app/env_$(uname -m)/bin/activate" && playwright install webkit
