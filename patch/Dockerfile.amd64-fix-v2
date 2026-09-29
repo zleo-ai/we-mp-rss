@@ -14,6 +14,13 @@ FROM ghcr.io/rachelos/we-mp-rss:latest
 
 COPY driver/wx.py /app/driver/wx.py
 COPY driver/success.py /app/driver/success.py
+# Auth API must honor driver.base (WERSS_AUTH_WEB), and MP_WXS_ feeds must fall
+# back to the default collector when no WeRead cookie is configured. Upstream
+# did not change these files between bb29a7a and d8feb6a (v1.5.3 line); only
+# overlay them onto a base image from that line.
+COPY apis/auth.py /app/apis/auth.py
+COPY driver/wx_api.py /app/driver/wx_api.py
+COPY jobs/mps.py /app/jobs/mps.py
 
 # Persist webkit in the image layer (replaces `docker commit`).
 # App runs in /app/env_<arch> (start.sh: PLANT_PATH=/app/env + uname -m).

@@ -20,13 +20,17 @@ COPY config.example.yaml /app/config.yaml
 # EOS-658: persist webkit in the image layer (do not docker-commit browsers).
 # install.sh already installs BROWSER_TYPE=webkit when INSTALL=True; this RUN
 # keeps webkit (MP login) next to chromium (weread cookie refresh).
+# A webkit install failure fails the build. Chromium stays best-effort as
+# before, but a failure now prints a WARNING instead of being swallowed.
 # 微信读书 Cookie 自动刷新：安装 Chromium 浏览器（与 webkit 共存）
-RUN VENV=$(ls -d /app/env_* | head -1) && \
-    PLAYWRIGHT_BROWSERS_PATH=/app/env/driver/_$(uname -m) \
-      "$VENV/bin/python3" -m playwright install webkit && \
-    PLAYWRIGHT_BROWSERS_PATH=/app/env/driver/_$(uname -m) \
-      "$VENV/bin/python3" -m playwright install chromium && \
-    "$VENV/bin/python3" -m playwright install-deps chromium || true
+RUN set -e; \
+    VENV=$(ls -d /app/env_* | head -1); \
+    if [ -z "$VENV" ]; then echo "ERROR: no /app/env_* virtualenv found" >&2; exit 1; fi; \
+    export PLAYWRIGHT_BROWSERS_PATH=/app/env/driver/_$(uname -m); \
+    "$VENV/bin/python3" -m playwright install webkit; \
+    { "$VENV/bin/python3" -m playwright install chromium && \
+      "$VENV/bin/python3" -m playwright install-deps chromium; } || \
+      echo "WARNING: playwright chromium install failed; in-container weread cookie refresh will not work" >&2
 RUN chmod +x /app/start.sh
 
 EXPOSE 8001
