@@ -231,6 +231,24 @@ const routes = [
           permissions: ['wechat:manage'] 
         }
       },
+      {
+        path: 'users',
+        name: 'UserManagement',
+        component: () => import('@/views/UserManagement.vue'),
+        meta: { 
+          requiresAuth: true,
+          permissions: ['admin'] 
+        }
+      },
+      {
+        path: 'weread',
+        name: 'WereadManagement',
+        component: () => import('@/views/WereadManagement.vue'),
+        meta: { 
+          requiresAuth: true,
+          permissions: ['wechat:manage'] 
+        }
+      },
     ]
   },
   {

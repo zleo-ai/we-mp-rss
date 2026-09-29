@@ -54,14 +54,48 @@ class WxGather:
         self.RecordAid(aid)
         return False
     def Model(self,type=None):
+        """
+        工厂方法：根据采集模式返回对应的采集器实例
+        
+        支持的模式:
+        - free_publish : 新版多端点降级模式（推荐），自动尝试 free_publish → 
+                         appmsgpublish → appmsg 等多个端点
+        - playwright   : Playwright 浏览器模式（兜底），使用真实浏览器访问后台
+        - app          : 旧版 App 浏览器模式（appmsgpublish 接口 + Playwright 内容抓取）
+        - web          : 旧版 Web 浏览器模式（同 app，多一层 HTML 清洗）
+        - api          : 旧版 API 模式（appmsg 接口 + requests 内容抓取）
+        - auto         : 自动降级，从 free_publish → playwright 依次尝试
+        - weread       : 微信读书通道，采集书架笔记、划线和书评
+        - weread_mp    : 微信读书 Web 通道，采集公众号文章与正文
+        """
         type=type or cfg.get("gather.model","web")
         print(f"采集模式:{type}")
-        if type=="app":
+        if type=="free_publish":
+            from core.wx.model.free_publish import MpsFreePublish
+            wx=MpsFreePublish()
+        elif type=="playwright":
+            from core.wx.model.playwright_mp import MpsPlaywright
+            wx=MpsPlaywright()
+        elif type=="app":
             from core.wx.model.app import MpsAppMsg
             wx=MpsAppMsg()
         elif type=="web":
             from core.wx.model.web import MpsWeb
             wx=MpsWeb()
+        elif type=="api":
+            from core.wx.model.api import MpsApi
+            wx=MpsApi()
+        elif type=="weread":
+            from core.wx.model.weread import MpsWeread
+            wx=MpsWeread()
+        elif type=="weread_mp":
+            from core.wx.model.weread_mp import MpsWereadMP
+            wx=MpsWereadMP()
+        elif type=="auto":
+            # 自动降级模式：先尝试 free_publish，失败后降级到 playwright
+            from core.wx.model.free_publish import MpsFreePublish
+            wx=MpsFreePublish()
+            wx._auto_fallback = True  # 标记为自动降级模式
         else:
             from core.wx.model.api import MpsApi
             wx=MpsApi()
@@ -169,7 +203,7 @@ class WxGather:
             
             # 使用HTTP代理或直连
             proxies = self._get_proxies()
-            r = session.get(url, headers=headers, proxies=proxies)
+            r = session.get(url, headers=headers, proxies=proxies) #type: ignore
             if r.status_code == 200:
                 text = r.text
                 text=self.remove_common_html_elements(text)
@@ -200,6 +234,18 @@ class WxGather:
                 # is_pay_subscribe：是否为付费订阅内容
                 # item_show_type：展示类型（0通常为普通图文，10可能为特定的无图或特殊样式）
                 # has_red_packet_cover：封面是否有红包挂件（0为无）
+                
+                # 处理 publish_info 字段（Text类型，JSON字符串）
+                publish_data=data.get("publish_info",{}) or {}
+                publish_info_value = publish_data 
+                if publish_info_value is not None:
+                    if isinstance(publish_info_value, dict):
+                        publish_info_str = json.dumps(publish_info_value)
+                    else:
+                        publish_info_str = str(publish_info_value)
+                else:
+                    publish_info_str = ""
+                
                 art={
                     "id":str(data['id']),  # 文章唯一标识ID
                     "mp_id":data['mp_id'],  # 公众号ID
@@ -207,19 +253,22 @@ class WxGather:
                     "url":data['link'],  # 文章链接地址
                     "pic_url":data['cover'],  # 封面图片URL
                     "content":data.get("content",""),  # 文章正文内容
-                    "publish_type":data.get("publish_type",0),  # 发布类型
-                    "publish_src":data.get("publish_src",0),  # 发布来源
-                    "publish_status":data.get("publish_status","200"),  # 发布状态码
+                    "publish_type":data.get("publish_type",0),  # 发布类型(1=普通发布, 101=群发消息)
+                    "art_type":data.get("type",0),  # 展示类型(0=图文, 5=视频, 7=音频, 10=贴图)
+                    "show_type": data.get("show_type",0) or data.get("item_show_type",0),  # 展示类型(0=图文, 5=视频, 7=音频, 10=贴图)
+                    "publish_src":data.get("publish_src",0) or publish_data.get('publish_src',0),  # 发布来源
+                    "publish_status":data.get("publish_status","200") or publish_data.get("publish_status",0),  # 发布状态码
                     "publish_time":data.get("update_time",""),  # 发布/更新时间
                     "create_time":data.get("create_time",""),  # 创建时间
                     "original_check_type":data.get("original_check_type",0),  # 原创检测类型
                     "in_profile":data.get("in_profile",0),  # 是否在公众号主页显示
                     "pre_publish_status":data.get("pre_publish_status",0),  # 预发布状态
-                    "service_type":data.get("service_type",0),  # 服务类型
-                    "item_show_types":data.get("item_show_types",0),  # 展示类型标识
-                    "copyright_stat":data.get("copyright_stat",0),  # 版权/原创状态(0非原创,1原创)
+                    "service_type":data.get("service_type",0) or publish_data.get("service_type",0),  # 服务类型
+                    "item_show_type":data.get("item_show_type",0),  # 展示类型标识
+                    "copyright_stat":data.get("copyright_stat",0) or publish_data.get("copyright_stat",0),  # 版权/原创状态(0非原创,1原创)
                     "has_red_packet_cover":data.get("has_red_packet_cover",0),  # 封面是否有红包挂件
                     "status": DATA_STATUS.DELETED if data.get("is_deleted",False) else DATA_STATUS.ACTIVE,  # 数据状态(已删除/正常)
+                    "publish_info": publish_info_str,  # 发布信息（JSON格式字符串）
                 }
                 if 'digest' in data:
                     art['description']=data['digest']
@@ -254,8 +303,8 @@ class WxGather:
             url,
             params=params,
             headers=headers,
-            proxies=proxies,    #type : ignore
-            ) 
+            proxies=proxies,    #type: ingnore
+            ) #type: ignore
             response.raise_for_status()  # 检查状态码是否为200
             data = response.text  # 解析JSON数据
             msg = json.loads(data)  # 手动解析
@@ -283,7 +332,9 @@ class WxGather:
                 return
             import time
             self.start_time = time.time()  # 记录开始执行时间
-            self.update_mps(mp_id,Feed(
+            self.update_mps(
+                mp_id, #type: ingnore
+                            Feed( 
             sync_time=int(time.time()),
             update_time=int(time.time()),
             ))
@@ -296,18 +347,17 @@ class WxGather:
         _cookies.append({'name':'token','value':self.token})
         if CallBack is not None:
             CallBack(item)
-        self.Wait(tips=f"{item['mps_title']} 处理完成",min=3,max=10)
+        self.Wait(tips=f"{item['mps_title']} 处理完成",min=3,max=10) #type: ignore
         pass
     def Error(self,error:str,code=None):
         self.Over()
         if code=="Invalid Session":
             # from core.queue import TaskQueue
             # TaskQueue.clear_queue()  # 已注释：避免微信认证失效时清空队列
-            if cfg.get("server.send_code")=="True":
-                from jobs.failauth import send_wx_code
-                import threading
-                setStatus(False)
-                threading.Thread(target=send_wx_code,args=(f"公众号平台登录失效,请重新登录",)).start()
+            from jobs.failauth import send_wx_code
+            import threading
+            setStatus(False)
+            threading.Thread(target=send_wx_code,args=(f"公众号平台登录失效,请重新登录",)).start()
             # send_wx_code(f"公众号平台登录失效,请重新登录")
             raise Exception(error)
         # raise Exception(error)

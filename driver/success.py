@@ -36,44 +36,50 @@ def getStatus():
     global WX_LOGIN_ED
     import time
 
+    def token_not_expired() -> bool:
+        token_data = getLoginInfo()
+        if not token_data or not token_data.get('token'):
+            return False
+        expiry = token_data.get('expiry') or {}
+        expiry_timestamp = expiry.get('expiry_timestamp')
+        if expiry_timestamp is not None:
+            try:
+                if float(expiry_timestamp) >= time.time():
+                    return True
+                print_warning("Token已过期，需要重新登录")
+                setStatus(False)
+                return False
+            except (TypeError, ValueError):
+                pass
+        remaining = expiry.get('remaining_seconds')
+        if remaining is not None:
+            try:
+                if float(remaining) > 0:
+                    return True
+            except (TypeError, ValueError):
+                pass
+            print_warning("Token已过期，需要重新登录")
+            setStatus(False)
+            return False
+        return True
+
     # 尝试从Redis读取
     if redis_client.is_connected:
         try:
             val = redis_client._client.get(REDIS_KEY_STATUS)
             if val is not None and val == "1":
-                # 检查token是否过期
-                token_data = getLoginInfo()
-                if token_data and 'expiry' in token_data and token_data['expiry']:
-                    expiry = token_data['expiry']
-                    # 检查剩余秒数
-                    if 'remaining_seconds' in expiry:
-                        remaining = expiry['remaining_seconds']
-                        if remaining is not None and remaining > 0:
-                            return True
-                        else:
-                            # token已过期，更新状态
-                            print_warning("Token已过期，需要重新登录")
-                            setStatus(False)
-                            return False
-                    # 检查过期时间戳
-                    elif 'expiry_timestamp' in expiry:
-                        expiry_timestamp = expiry['expiry_timestamp']
-                        # 过期时间戳 >= 当前时间，说明还没过期
-                        if expiry_timestamp and expiry_timestamp >= time.time():
-                            return True
-                        else:
-                            # token已过期，更新状态
-                            print_warning("Token已过期，需要重新登录")
-                            setStatus(False)
-                            return False
-                # 没有过期信息，但状态为True，暂时返回True
-                return True
+                return token_not_expired()
         except Exception as e:
             print_warning(f"检查登录状态失败: {e}")
             pass
     # 回退到全局变量
+    # 只在锁内读取状态；token_not_expired() 过期时会调用 setStatus()，
+    # 而 setStatus() 也要拿 login_lock（非可重入），放在锁内会自锁卡死
     with login_lock:
-        return WX_LOGIN_ED
+        logged_in = WX_LOGIN_ED
+    if logged_in:
+        return token_not_expired()
+    return logged_in
 def getLoginInfo():
     from driver.token import _get_token_data
     return _get_token_data()

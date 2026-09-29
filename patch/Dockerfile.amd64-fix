@@ -1,0 +1,6 @@
+# Historical overlay (flat /opt/wemp-patch context). Prefer
+# patch/Dockerfile.amd64-fix-v2 (repo-root COPY) or the root Dockerfile (v3).
+# 补丁修:微信登录页隐藏空白二维码、登录成功检测、PID锁、token过期判断
+FROM ghcr.io/rachelos/we-mp-rss:latest
+COPY wx.py /app/driver/wx.py
+COPY success.py /app/driver/success.py

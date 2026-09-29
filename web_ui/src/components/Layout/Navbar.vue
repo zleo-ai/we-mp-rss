@@ -65,6 +65,18 @@
         </template>
         Access Key
       </a-menu-item>
+      <a-menu-item key="/weread">
+        <template #icon>
+          <icon-book />
+        </template>
+        微信读书
+      </a-menu-item>
+      <a-menu-item key="/users">
+        <template #icon>
+          <icon-user />
+        </template>
+        用户管理
+      </a-menu-item>
       <a-menu-item key="/env-exception">
         <template #icon>
           <icon-exclamation-circle />

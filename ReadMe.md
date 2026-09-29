@@ -64,6 +64,7 @@ A tool for subscribing to and managing WeChat Official Account content, providin
 - Scheduled automatic content updates
 - Multiple database support (default SQLite, optional MySQL)
 - Multiple scraping methods support
+- Optional `weread_mp` collection mode for `MP_WXS_*` feeds ([configuration](docs/weread-mp.md))
 - Multiple RSS client support
 - Authorization expiration reminders
 - Custom notification channels
@@ -220,7 +221,7 @@ The following are the environment variable configurations supported in `config.y
 | `APP_NAME` | `we-mp-rss` | Application name |
 | `SERVER_NAME` | `we-mp-rss` | Server name |
 | `WEB_NAME` | `WeRSS微信公众号订阅助手` | Frontend display name |
-| `SEND_CODE` | `True` | Whether to send authorization QR code notifications |
+| `SEND_CODE` | `False` | Whether to send authorization QR code in expired notification (text-only notification by default) |
 | `CODE_TITLE` | `WeRSS授权二维码` | QR code notification title |
 | `ENABLE_JOB` | `True` | Whether to enable scheduled tasks |
 | `AUTO_RELOAD` | `False` | Auto-restart service on code changes |
@@ -259,7 +260,5 @@ The following are the environment variable configurations supported in `config.y
 | `LOG_FILE` | Empty | Log file path |
 | `LOG_LEVEL` | `INFO` | Log level |
 | `EXPORT_PDF` | `False` | Whether to enable PDF export functionality |
-
-
 
 

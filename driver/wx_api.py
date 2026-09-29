@@ -671,11 +671,11 @@ class WeChatAPI:
             print_error(f"获取账号信息失败: {str(e)}")
             return None
 
-    async def switch_account(self,username:str=""):
+    async def switch_account(self,username:str="",progress_callback=None):
         """切换微信公众号账号（异步）"""
         self.login_with_token()
         from driver.wx import WX_API
-        return await WX_API.switch_account(username)
+        return await WX_API.switch_account(username, progress_callback=progress_callback)
     def _redirect(self):
         url=f"https://mp.weixin.qq.com/cgi-bin/loginpage?url=/cgi-bin/home?t=home/index&lang=zh_CN&token={self.token}"
         response=self.session.get(url)
@@ -962,8 +962,9 @@ class WeChatAPI:
         return {"login_status":self.HasLogin(),"qr_code":self.GetHasCode()}
     def HasLogin(self):
         return self._islogin and not self.GetHasCode()
-    def Close(self):
-        pass
+    async def Close(self):
+        # 与 driver.wx.Wx.Close 保持同一接口（apis/auth.py 会 await 它）；HTTP 登录没有浏览器要关
+        return None
 # 创建全局实例
 WeChat_api = WeChatAPI()
 

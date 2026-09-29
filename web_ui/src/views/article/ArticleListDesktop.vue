@@ -63,10 +63,6 @@
                       <div v-if="item.mp_intro" style="font-size: 12px; color: var(--color-text-2); line-height: 1.5;">
                         {{ item.mp_intro }}
                       </div>
-                      <div style="display: flex; gap: 12px; font-size: 12px; color: var(--color-text-3);">
-                        <span>文章数: {{ item.article_count || 0 }}</span>
-                        <span>状态: {{ item.status === 1 ? '启用' : '停用' }}</span>
-                      </div>
                       <div v-if="canManageMp(item.id)" style="display: flex; gap: 8px; padding-top: 8px; border-top: 1px solid var(--color-border);">
                         <a-button size="small" type="text" status="danger" @click.stop="deleteMp(item.id)">
                           <template #icon><icon-delete /></template>
@@ -139,6 +135,10 @@
               <a-button @click="handleAuthClick">
                 <template #icon><icon-scan /></template>
                 刷新授权
+              </a-button>
+              <a-button type="outline" status="success" @click="handleWereadAuthClick">
+                <template #icon><icon-book /></template>
+                微信读书授权
               </a-button>
               <a-dropdown>
                 <a-button>
@@ -436,20 +436,18 @@ const copyrightColorMap: Record<number, string> = {
 // 展示类型映射
 const itemShowTypeTextMap: Record<number, string> = {
   0: '图文',
-  1: '图片',
-  2: '音频',
-  3: '视频',
-  10: '纯文字',
-  11: '文字+图片'
+  5: '视频',
+  7: '音频',
+  10: '贴图',
+  11: '分享',
 }
 
 const itemShowTypeColorMap: Record<number, string> = {
   0: 'green',
-  1: 'purple',
-  2: 'orange',
-  3: 'red',
-  10: 'gray',
-  11: 'cyan'
+  5: 'red',
+  7: 'orange',
+  10: 'purple',
+  11: 'green'
 }
 
 // 发布类型映射
@@ -472,7 +470,7 @@ const allColumnOptions = [
   { key: 'mp_id', label: '公众号', required: false },
   { key: 'has_content', label: '正文', required: false },
   { key: 'copyright_stat', label: '原创', required: false },
-  { key: 'item_show_types', label: '类型', required: false },
+  { key: 'item_show_type', label: '类型', required: false },
   { key: 'created_at', label: '更新时间', required: false },
   { key: 'publish_time', label: '发布时间', required: false },
   { key: 'actions', label: '操作', required: true }
@@ -681,15 +679,15 @@ const columns = computed(() => {
     },
     {
       title: '类型',
-      dataIndex: 'item_show_types',
+      dataIndex: 'item_show_type',
       width: 60,
       align: 'center',
       render: ({ record }) => {
-        const showType = record.item_show_types ?? 0
+        const showType = (record.show_type||record.item_show_type) ?? 0
         return h('a-tag', {
           color: itemShowTypeColorMap[showType] || 'gray',
           size: 'small'
-        }, itemShowTypeTextMap[showType] || '图文')
+        }, itemShowTypeTextMap[showType] || showType)
       }
     },
     {
@@ -893,6 +891,15 @@ const handleAuthClick = () => {
   showAuthQrcode()
 }
 
+const showWereadAuthQrcode = inject('showWereadAuthQrcode') as (() => void) | undefined
+const handleWereadAuthClick = () => {
+  if (showWereadAuthQrcode) {
+    showWereadAuthQrcode()
+  } else {
+    Message.warning('微信读书授权入口暂不可用')
+  }
+}
+
 const exportOPML = async () => {
   try {
     const response = await ExportOPML();
@@ -1081,13 +1088,20 @@ const handleRefresh = () => {
   UpdateMps(activeMpId.value, {
     start_page: refreshForm.value.startPage,
     end_page: refreshForm.value.endPage
-  }).then(() => {
-    Message.success('刷新成功')
+  }).then((res: any) => {
+    // 接口已同步完成采集，立即刷新列表展示新文章
+    const count = res?.total ?? res?.data?.total
+    Message.success(count !== undefined && count !== null ? `刷新成功，新增 ${count} 篇` : '刷新成功')
     refreshModalVisible.value = false
+    fetchArticles()
+  }).catch((err: any) => {
+    // 业务错误（如微信读书 Cookie 失效）已由 http 拦截器统一弹窗，这里只兜底网络异常
+    if (typeof err !== 'object' || !err?.message) {
+      Message.error(String(err || '刷新失败'))
+    }
   }).finally(() => {
     fullLoading.value = false
   })
-  fetchArticles()
 }
 const clear_articles = () => {
   fullLoading.value = true
