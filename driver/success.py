@@ -73,10 +73,13 @@ def getStatus():
             print_warning(f"检查登录状态失败: {e}")
             pass
     # 回退到全局变量
+    # 只在锁内读取状态；token_not_expired() 过期时会调用 setStatus()，
+    # 而 setStatus() 也要拿 login_lock（非可重入），放在锁内会自锁卡死
     with login_lock:
-        if WX_LOGIN_ED:
-            return token_not_expired()
-        return WX_LOGIN_ED
+        logged_in = WX_LOGIN_ED
+    if logged_in:
+        return token_not_expired()
+    return logged_in
 def getLoginInfo():
     from driver.token import _get_token_data
     return _get_token_data()
