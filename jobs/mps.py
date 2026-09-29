@@ -33,6 +33,28 @@ def fetch_all_article():
 def test(info:str):
     print("任务测试成功",info)
 
+def select_collector(mp):
+    """为单个公众号选择采集器。
+
+    MP_WXS_* 公众号在配置了微信读书 Cookie 时改用 weread_mp 采集器；
+    没有 Cookie（或微信读书通道加载失败）时继续使用默认采集器，
+    不再直接报错跳过——公众平台后台添加的公众号 id 同样是 MP_WXS_ 前缀。
+    """
+    wx = WxGather().Model()
+    if str(mp.id or "").startswith("MP_WXS_") and mp.id != "MP_WXS_FEATURED_ARTICLES":
+        try:
+            from core.wx.model.weread_mp import MpsWereadMP
+            _mp_wx = MpsWereadMP()
+            _mp_wx._load_weread_auth()
+        except Exception as e:
+            print_warning(f"[{mp.mp_name}] 微信读书通道不可用（{e}），使用默认采集模式")
+            return wx
+        if _mp_wx._weread_cookies:
+            print_info(f"[{mp.mp_name}] 微信读书公众号 → weread_mp 采集模式")
+            return _mp_wx
+        print_info(f"[{mp.mp_name}] 微信读书 Cookie 未配置，使用默认采集模式")
+    return wx
+
 from core.models.message_task import MessageTask
 # from core.queue import TaskQueue
 from .webhook import web_hook
@@ -66,19 +88,7 @@ def do_job(mp=None,task:MessageTask=None,isTest=False):
                 count = 1
                 success = True
             else:
-                wx = WxGather().Model()
-                # 微信读书公众号（MP_WXS_*）自动改用 weread_mp 采集器：
-                # 只有微信读书 Cookie 已配置时才启用，否则该 feed 无法用默认模式采集
-                if str(mp.id or "").startswith("MP_WXS_") and mp.id != "MP_WXS_FEATURED_ARTICLES":
-                    from core.wx.model.weread_mp import MpsWereadMP
-                    _mp_wx = MpsWereadMP()
-                    _mp_wx._load_weread_auth()
-                    if _mp_wx._weread_cookies:
-                        wx = _mp_wx
-                        print_info(f"[{mp.mp_name}] 微信读书公众号 → weread_mp 采集模式")
-                    else:
-                        print_warning(f"[{mp.mp_name}] 微信读书 Cookie 未配置，跳过采集")
-                        raise RuntimeError("微信读书 Cookie 未配置")
+                wx = select_collector(mp)
                 try:
                     wx.get_Articles(mp.faker_id,CallBack=UpdateArticle,Mps_id=mp.id,Mps_title=mp.mp_name, MaxPage=1,Over_CallBack=Update_Over,interval=interval)
                     success = True
